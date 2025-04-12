@@ -1,0 +1,1636 @@
+---
+title: "Oyster_markdown"
+author: "Dominik Antoni"
+date: "2025-02-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Install packages
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("phyloseq")
+BiocManager::install("msa")
+BiocManager::install("ggtree")
+install.packages("remotes")
+BiocManager::install("microbiome")
+install.packages("devtools")
+install.packages("viridis")
+install.packages("ggtree")
+install.packages("microbiome")
+install.packages('installr')
+install.packages("ggplot2")
+install.packages("tidyr")
+install.packages("tidyverse")
+install.packages("phyloseq")
+install.packages("vegan")
+install.packages("msa")
+install.packages("remotes")
+install.packages("seqinr")
+install.packages("ggfortify")
+install.packages("remotes")
+install.packages("clustsig")
+install.packages("factoextra")
+install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+install.packages("phangorn")
+BiocManager::install("DESeq2")
+install.packages("pheatmap")
+```
+
+
+load packages 
+```{r}
+library("remotes")
+library("seqinr")
+library("remotes")
+library("msa")
+library("ape")
+library("ggtree")
+library("viridis")
+library("microbiome")  
+library("remotes")
+library("amplicon")
+library("microbiome")
+library("installr")
+library("phyloseq")
+library("amplicon")
+library("vegan")
+library("tidyverse")
+library("factoextra")
+library("ggforce")
+library("cluster")
+library("pairwiseAdonis")
+library("car")
+library("phangorn")
+library("DESeq2")
+library("pheatmap")
+library("scales")
+library("patchwork")
+
+.libPaths()
+```
+
+Loaing in the Counttable, the Taxonomy Table and the meta data table, while they are also made compatible to each other for the construction of later phyloseq objects. 
+
+```{r}
+setwd("C:/Users/dantoni/Documents/PhDominik/Austerprojekt/Bioinformatik/Rscript/Oyster")
+
+myCounts <- read.csv("mycount_table.tsv", sep = ",")
+myTax <- read.csv("myTaxtable.tsv", sep = ",")
+meta_data <- read.csv("Meta.csv", sep = ";")
+
+mycount <- myCounts %>% 
+  column_to_rownames(var = "X")
+
+mycolnames <- sub("([ABC]).*", "\\1", colnames(mycount)) 
+colnames(mycount) = mycolnames
+
+mytax <- myTax %>%
+  column_to_rownames(var ="X")
+
+rownames(meta_data) <- meta_data$Sample.ID 
+
+```
+#Analysis of water samples 
+remove all non water samples from the data set 
+
+```{r}
+#Filtering the Watersamples must be done on the meta data table and the count table
+meta_data_water <- meta_data %>%
+  filter(Sample.Type == "Water") %>%
+  select("Sample.number","Sample.ID","date","time","Mesocosm","d.Alk","Sample.Type","Type","Treatment")
+
+
+mycount_water <- mycount[, colnames(mycount) %in% rownames(meta_data_water)]
+
+#removal of a sample with just 40 reads
+# square root transformation of the data
+mycount_water <- mycount_water%>%
+  select(-"X82.W.T2.Re1.C") %>%
+  sqrt()%>%
+  ceiling()
+
+#filter the sample out of the meta dataset 
+meta_data_water <- meta_data_water %>%
+  filter(Sample.ID != "X82.W.T2.Re1.C")
+
+```
+
+The countdata needs to be rarefyed to the sample with the lowest sequencing depth. Additionally a phyloseq object is constructed, which is used through out the rest of the analysis. Also establish vectors for the ordering and the coloring of the data for plots. 
+```{r}
+rar_counttable_water <- t(rrarefy(t(mycount_water), sample = min(colSums(mycount_water))))
+
+my_phyloseq_water <- phyloseq(otu_table(rar_counttable_water, taxa_are_rows= T),
+                       sample_data(meta_data_water),
+                       tax_table(as.matrix(mytax)))
+
+
+color_Treatment_vector <- c( "Control" = "grey22",
+                             "Dissolved 250" = "deepskyblue1",
+                             "Dissolved 500" = "deepskyblue4",
+                             "Olivine 250" = "seagreen1", 
+                             "Olivine 500" = "seagreen4",
+                             "No addition" = "bisque3") 
+
+color_type_vector <- c( "Control" = "grey22",
+                        "Olivine" = "olivedrab4",
+                        "Dissolved" = "dodgerblue4", 
+                        "No addition" = "bisque3")
+
+type_ordering <- c("Control", "No addition", "Dissolved", "Olivine")
+treatment_ordering <- c("Control", "No addition", "Dissolved 250", "Dissolved 500", "Olivine 250", "Olivine 500" )
+
+
+```
+
+A PCoA is drawn with a bray curtis distance between all water samples taken during the experiment. 
+tis inculdes the centroid of the datasets. 
+```{r}
+vst_pcoa_w <- ordinate(my_phyloseq_water, method="PCoA", distance = "bray")
+PCoA_BC_w <- plot_ordination(my_phyloseq_water,vst_pcoa_w, color = "Treatment", label = "date") 
+
+
+PCoA_Data <- PCoA_BC_w$data
+
+PCoA_Data$Type <- factor(PCoA_Data$Type, levels = type_ordering )
+PCoA_Data$Treatment <- factor(PCoA_Data$Treatment, levels = treatment_ordering )
+
+#Centroid addition
+
+centroid_Mesocosm <- as.data.frame(PCoA_Data) %>%
+  group_by(Treatment) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+PCoA_Mesocosm_centroid_Treatments <- ggplot(PCoA_Data, aes(x=Axis.1, y=Axis.2, color=Treatment))+
+  geom_point(size=4)+
+  geom_point(data=centroid_Mesocosm, aes(x=Axis.1, y=Axis.2, fill = Treatment), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  labs(color ="Treatment")+
+  ggtitle("PCoA Water Samples ~ Treatments")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [17.7%]", y="Axis.2 [15.5%]")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)+
+  scale_fill_manual(values = color_Treatment_vector )
+
+PCoA_Mesocosm_centroid_Treatments
+
+ggsave("PCoA_Water_treatment.png", PCoA_Mesocosm_centroid_Treatments, width = 12, height = 10)
+
+
+```
+PCoA_type
+
+```{r}
+vst_pcoa_w <- ordinate(my_phyloseq_water, method="PCoA", distance = "bray")
+PCoA_BC_w_type <- plot_ordination(my_phyloseq_water,vst_pcoa_w, color = "Type") 
+
+PCoA_Data_type <- PCoA_BC_w_type$data
+
+PCoA_Data_type$Type <- factor(PCoA_Data_type$Type, levels = type_ordering )
+PCoA_Data_type$Treatment <- factor(PCoA_Data_type$Treatment, levels = treatment_ordering )
+
+
+centroid_Mesocosm_type <- as.data.frame(PCoA_Data_type) %>%
+  group_by(Type) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+PCoA_Mesocosm_centroid_Type <- ggplot(PCoA_Data_type, aes(x=Axis.1, y=Axis.2, color=Type))+
+  geom_point(size=4)+
+  geom_point(data=centroid_Mesocosm_type, aes(x=Axis.1, y=Axis.2, fill = Type), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("PCoA Water Samples ~ Alkalinity Type")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [17.7%]", y="Axis.2 [15.5%]", color= "Mesocosm")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+    scale_color_manual(values = color_type_vector)+
+  scale_fill_manual(values = color_type_vector )
+
+ggsave("PCoA_Water_Type.png", PCoA_Mesocosm_centroid_Type, width = 12, height = 10)
+
+```
+
+PCoA All samples
+```{r}
+# phyloseq object alle proben ohne zu rarefizieren 
+
+color_Sample.Type_vector <- c( "Gill" = "ivory4",
+                               "Water" = "lavenderblush3", 
+                               "Food" = "khaki3")
+
+
+phyloseq_all <- phyloseq(otu_table(mycount, taxa_are_rows= T),
+                       sample_data(meta_data),
+                       tax_table(as.matrix(mytax)))
+
+vst_pcoa_all <- ordinate(phyloseq_all, method="PCoA", distance = "bray")
+PCoA_BC_all <- plot_ordination(phyloseq_all,vst_pcoa_all, color = "Sample.Type", label = "Type") 
+
+PCoA_Data_all <- PCoA_BC_all$data
+ASVcounts <- colSums(mycount)
+
+ASVcounts_df <- data.frame(Sample.ID = names(ASVcounts), ASV_count = as.numeric(ASVcounts), row.names = NULL)
+
+
+meta_data_ASV<- merge(meta_data,ASVcounts_df, by="Sample.ID")
+
+
+
+meta_data_ASV$ASV_count[is.na(meta_data_ASV$ASV_count)] <- 0
+
+median_gill <- meta_data_ASV %>% 
+  group_by(Sample.Type)%>%
+  summarise(median_reads= median (ASV_count), .groups ="drop")
+
+
+boxplot_reads <- ggplot(meta_data_ASV, aes(x=Sample.Type, y= ASV_count, colour = Sample.Type ))+ 
+  geom_boxplot()+ 
+  scale_color_manual(values = color_Sample.Type_vector )+
+  scale_y_continuous( limits = c(0,500000), expand = c(0,0), labels = comma,
+                      breaks = c(0,100000,200000,300000,400000,500000)) +
+  labs(x = "Sample Type", y= "ASV Count [N]", title= "Difference in ASV count ~ Sample Type")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))
+  
+
+ggsave("Boxplot_reads.png", boxplot_reads, width = 12, height = 10)
+
+
+
+centroid_all <- as.data.frame(PCoA_Data_all) %>%
+  group_by(Sample.Type) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+PCoA_all <- ggplot(PCoA_Data_all, aes(x=Axis.1, y=Axis.2, color=Sample.Type))+
+  geom_point(size=4)+
+  geom_point(data=centroid_all, aes(x=Axis.1, y=Axis.2, fill = Sample.Type), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("PCoA All Samples ~ Sample.Type")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [19.8%]", y="Axis.2 [8%]", color= "Sample Type")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+  
+  scale_color_manual(values = color_Sample.Type_vector)+
+  scale_fill_manual(values = color_Sample.Type_vector )
+
+ggsave("PCoA_all_Sample_Type.png", PCoA_all, width = 12, height = 10)
+
+
+```
+how does treatment effect diversity 
+
+```{r}
+#unrarevied phyloseq 
+
+p_diversity <- plot_richness(my_phyloseq_water, measures = c("Observed","Shannon"))
+  
+diversity_data <-  p_diversity$data
+diversity_data$variable <- gsub("Observed","Richness",diversity_data$variable)
+
+diversity_data$Type <- factor(diversity_data$Type, levels = type_ordering) 
+
+diversity_data_median <- diversity_data %>%
+  filter(variable== "Richness")%>%
+  group_by(Type)%>%
+  summarise(median_richness = median(value))
+
+p_alpha_boxplot_MK <- ggplot(diversity_data, aes(x= Type, y= value))+
+  facet_wrap(~variable, scales = "free_y")+
+  geom_boxplot(show.legend = T)+ 
+  ggtitle("Alpha-diversity ~ Water Samples")+
+  labs(x = "Alkalinity type")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))
+
+ggsave("Diversity_plot_type.png", p_alpha_boxplot_MK, width = 16, height = 8)
+
+## dont save this plot treatment does not affect diversity
+p_alpha_boxplot_time <- ggplot(diversity_data, aes(x= date, y= value))+
+  facet_wrap(~variable, scales = "free_y")+
+  geom_boxplot(show.legend = T)+ 
+  ggtitle("Alpha-diversity measures")+
+  labs(x = "Mesocosm")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))
+
+
+```
+
+PCoA for statistical Test (remove the control treatment)
+
+```{r}
+
+meta_data_statistical_test_water <- meta_data_water %>%
+  filter(!startsWith(Type,"C")) 
+
+#counttable
+count_table_statistical_test_water <- rar_counttable_water[,colnames(rar_counttable_water) %in% rownames(meta_data_statistical_test_water)]
+
+phyloseq_stat <- phyloseq(otu_table(count_table_statistical_test_water, taxa_are_rows= T),
+                       sample_data(meta_data_statistical_test_water),
+                       tax_table(as.matrix(mytax)))
+
+vst_pcoa_stat <- ordinate(phyloseq_stat, method="PCoA", distance = "bray")
+PCoA_BC_stat <- plot_ordination(phyloseq_stat,vst_pcoa_stat, color = "Type", label = "d.Alk") 
+
+
+PCoA_Data_stat <- PCoA_BC_stat$data
+
+type_ordering_stat <- c( "No addition", "Dissolved", "Olivine")
+
+
+PCoA_Data_stat$Type <- factor(PCoA_Data_stat$Type, levels = type_ordering_stat)
+
+
+centroid_stat <- as.data.frame(PCoA_Data_stat) %>%
+  group_by(Type) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+
+
+PCoA_stat <- ggplot(PCoA_Data_stat, aes(x=Axis.1, y=Axis.2, color=Type))+
+  geom_point(size=4)+
+  geom_point(data=centroid_stat, aes(x=Axis.1, y=Axis.2, fill = Type), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("PCoA Water Statistic ~ Alkalinity Type")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [21.6%]", y="Axis.2 [10.5%]", color= "Alaklinity type")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_type_vector)+
+  scale_fill_manual(values = color_type_vector )
+  
+
+
+ggsave("PCoA_for_Stats.png", PCoA_stat, width = 12, height = 10)
+
+
+```
+
+statistical test like retake 
+```{r}
+
+#centroid test
+#remove t0 from meta data and make a counttable with the removed samples
+meta_data_statistical_test_water <- meta_data_water %>%
+  filter(!startsWith(Type,"c")) 
+#counttable
+count_table_statistical_test_water <- rar_counttable_water[,colnames(rar_counttable_water) %in% rownames(meta_data_statistical_test_water)]
+
+#make a distance matrix out of the counttable
+rare_dist_water <- vegdist(t(count_table_statistical_test_water)) %>%
+  as.dist()
+
+meta_data_statistical_test_water$date <- as.factor(meta_data_statistical_test_water$date)
+meta_data_statistical_test_water$Mesocosm <- as.factor(meta_data_statistical_test_water$Mesocosm)
+meta_data_statistical_test_water$Type <- as.factor(meta_data_statistical_test_water$Type)
+
+#write a function which adds a "*" if a value is significant 
+
+Significante_indicator <- function(data, column,pvalue_threshold = 0.05) {
+  # Check if column exists
+  if (!column %in% colnames(data)){
+    stop("Column does not exist in the provided data frame")
+  }
+  
+  #Extract the specified column
+  p_values <- data[[column]]
+  
+  #check if column contains p_values 
+  if(!all(p_values>=0 & p_values <=1)){
+    stop("The Column does not contain p_values (numeric between 0 and 1)")
+  }
+  
+  # Add a new column indicating significanve 
+  
+  data$Sginificance <- ifelse(p_values < pvalue_threshold, "*", "" )
+  
+  return(data)
+
+}
+
+
+
+adonis_result_water_date <- adonis2(rare_dist_water~date, data=meta_data_statistical_test_water, permutations = 1000)
+adonis_result_water_Mesocosm <- adonis2(rare_dist_water~Mesocosm, data=meta_data_statistical_test_water, permutations = 1000)
+adonis_result_water_Type <- adonis2(rare_dist_water~Type, data=meta_data_statistical_test_water, permutations = 1000)
+
+adonis_table_dalk_TypeMesocosm <- adonis2(rare_dist_water~Type*Mesocosm, data=meta_data_statistical_test_water, permutations = 1000)
+
+variable_tested <- cbind(c("Date","Mesocosm", "Type"))
+Adonis_pvalues <- cbind(c(adonis_result_water_date$`Pr(>F)`[1],
+                          adonis_result_water_Mesocosm$`Pr(>F)`[1],
+                          adonis_result_water_Type$`Pr(>F)`[1]))  %>%
+  round(3)
+
+adonis_table_pvalue_water <- data.frame(variable_tested,Adonis_pvalues)%>%
+  as.data.frame()%>%
+  rename("Parameter" = "variable_tested",
+         "p_value" = "Adonis_pvalues") %>%
+  Significante_indicator("p_value")
+
+
+write.table(adonis_table_pvalue_water,"adonis_centroid_test.tsv", sep="\t", row.names = F, quote = T )
+
+pairwise_table_date <- pairwise.adonis(rare_dist_water, meta_data_statistical_test_water$date)%>%
+  select(pairs,p.value,p.adjusted) %>%
+  rename("Pairs" = "pairs",
+         "p_value" = "p.value",
+         "p_value_adjusted"= "p.adjusted") %>%
+  Significante_indicator("p_value_adjusted")
+  
+  
+pairwise_table_Mesocosm <- pairwise.adonis(rare_dist_water, meta_data_statistical_test_water$Mesocosm) %>%
+  select(pairs,p.value,p.adjusted) %>%
+  rename("Pairs" = "pairs",
+         "p_value" = "p.value",
+         "p_value_adjusted"= "p.adjusted") %>%
+  Significante_indicator("p_value_adjusted")
+
+pairwise_table_Type <- pairwise.adonis(rare_dist_water, meta_data_statistical_test_water$Type) %>%
+  select(pairs,p.value,p.adjusted) %>%
+  rename("Pairs" = "pairs",
+         "p_value" = "p.value",
+         "p_value_adjusted"= "p.adjusted") %>%
+  Significante_indicator("p_value_adjusted")
+
+write.table(pairwise_table_date,"pairwise_posthoc_datum.tsv", sep="\t", row.names = F, quote = T)
+write.table(pairwise_table_Mesocosm,"pairwise_posthoc_Mesocosm.tsv", sep="\t", row.names = F, quote = T)
+write.table(pairwise_table_Type,"pairwise_posthoc_Type.tsv", sep="\t", row.names = F, quote = T)
+
+
+#permdist
+permdist_results_date <- betadisper(rare_dist_water, meta_data_statistical_test_water$date)
+permdist_results_Mesocosm <- betadisper(rare_dist_water, meta_data_statistical_test_water$Mesocosm)
+permdist_results_Type <- betadisper(rare_dist_water, meta_data_statistical_test_water$Type)
+
+#dispersion
+dispersion_anova_date <- anova(permdist_results_date)
+dispersion_anova_Mesocosm <- anova(permdist_results_Mesocosm)
+dispersion_anova_type <- anova(permdist_results_Type)
+
+
+pvalues_dispersion <- round(rbind(dispersion_anova_date$`Pr(>F)`[1], dispersion_anova_Mesocosm$`Pr(>F)`[1],dispersion_anova_type$`Pr(>F)`[1]),3)
+dispersion_parameters <- rbind("Date", "Mesocosm", "Type")
+dispersion_anova_table<- data.frame(dispersion_parameters,pvalues_dispersion) %>%
+  rename("Parameter" = "dispersion_parameters",
+         "p_value" = "pvalues_dispersion") %>%
+  Significante_indicator("p_value")
+
+write.table(dispersion_anova_table, "anova_dispersion.tsv", sep="\t", row.names = F, quote = T)
+
+
+#PostHoc Test
+
+tukey_table_date <- TukeyHSD(permdist_results_date)$group 
+
+tukey_table_date <- tukey_table_date %>%
+  as.data.frame()%>%
+  mutate(Group = rownames(tukey_table_date)) %>%
+  rename("p_value_adjusted" = "p adj") %>%
+  mutate(p_value_adjusted = round(p_value_adjusted, 3))%>% 
+  select(Group,p_value_adjusted) %>% 
+  Significante_indicator("p_value_adjusted") %>%
+  remove_rownames()
+
+Tukey_table_Mesocosm <-TukeyHSD(permdist_results_Mesocosm)$group
+
+Tukey_table_Mesocosm <- Tukey_table_Mesocosm %>%
+  as.data.frame() %>%
+  mutate(Group = rownames(Tukey_table_Mesocosm)) %>%
+  rename("p_value_adjusted" = "p adj") %>%
+  mutate(p_value_adjusted = round(p_value_adjusted, 3))%>% 
+  select(Group,p_value_adjusted) %>% 
+  Significante_indicator("p_value_adjusted") %>%
+  remove_rownames()
+
+Tukey_table_type <-TukeyHSD(permdist_results_Type)$group
+
+
+Tukey_table_type <- Tukey_table_type %>%
+  as.data.frame()%>%
+  mutate(Group = rownames(Tukey_table_type)) %>%
+  rename("p_value_adjusted" = "p adj") %>%
+  mutate(p_value_adjusted = round(p_value_adjusted, 3))%>% 
+  select(Group,p_value_adjusted) %>% 
+  Significante_indicator("p_value_adjusted") %>%
+  remove_rownames()
+
+ write.table(tukey_table_date, "Dispersion_posthoc_tukey_Date.tsv", sep="\t", row.names = F, quote = T)
+ write.table(Tukey_table_Mesocosm, "Dispersion_posthoc_tukey_Mesocosm.tsv", sep="\t", row.names = F, quote = T)
+ write.table(Tukey_table_type, "Dispersion_posthoc_tukey_Type.tsv", sep="\t", row.names = F, quote = T)
+
+```
+
+
+
+For the drawing of community composition barplots I need to generate 2 functions. One which makes a table based on a phyloseq object, a taxa tank and a filter factor. The other is a function which has this table as input and then draws the plot. The second funktion "Male_Bar_Plot" is usually modified for the specific dataset for which I am currently working. hence I ocasionally have mutiple version of that function in this Chunk 
+```{r}
+OTU_Table_For_Plot<- function(ASV_physeq, Tax_Rank, Filter_factor){
+  
+  ASV_Count_Table<- otu_table(tax_glom(ASV_physeq, taxrank = Tax_Rank))
+  Name_Vector <- as.vector(tax_table(tax_glom(ASV_physeq, taxrank = Tax_Rank))[,Tax_Rank])
+  
+  
+  rownames(ASV_Count_Table) <- Name_Vector
+  
+  unclassivied <- colSums(otu_table(ASV_physeq)) - colSums(ASV_Count_Table)
+  Counts_Plus_unidentivied <- rbind(ASV_Count_Table, "Unclassivied" = unclassivied)
+  
+  #calculate ratio
+  Prop <- apply(Counts_Plus_unidentivied, 2, function(x) x/sum(x)*100)
+  #filtering
+  not_filtered <- data.frame(Prop[apply(Prop, 1, max) > Filter_factor, ])
+  Filtered <- colSums(Prop) - colSums(not_filtered)
+  with_Others <- rbind(not_filtered, "Others" = Filtered)
+  return(with_Others)
+  dim(with_Others)
+}
+
+Make_Bar_Plot_return_Plot <- function(with_Others,x){
+  with_Others$Major_Taxa <- rownames(with_Others)
+  with_Others.g <- gather(with_Others, Sample, Proportion, -Major_Taxa)
+  
+  #hier variabeln anpassen
+  Mergin_table <- data.frame("Sample"=row.names(x),  "d.Alk" = x$d.Alk,
+                             "day"= x$date, "Mesocosm"= x$Mesocosm,
+                              "Probenart"=x$Sample.Type)
+  
+  with_Others.g2 <- merge(with_Others.g, Mergin_table)
+  
+  Others_for_removal <- "Others"
+  no_others <- levels(as.factor(with_Others.g2$Major_Taxa))[!levels(as.factor(with_Others.g2$Major_Taxa))%in% Others_for_removal]
+  levels_append_Others<- as.factor(append(no_others,"Others"))
+  with_Others.g2$Major_Taxa <- factor(with_Others.g2$Major_Taxa
+                                      , levels = levels_append_Others)
+  b <- factor(with_Others.g2$Major_Taxa
+              , levels = levels_append_Others)
+  
+  
+  a <- ggplot(with_Others.g2, aes(x=as.factor(Mesocosm), y=Proportion, fill=Major_Taxa)) +
+    geom_bar(width=0.6, stat="identity", na.rm = TRUE,position="fill") +
+    facet_grid(~as.factor(day)) + 
+    scale_fill_viridis(discrete = TRUE, option = "D")
+  return(a)
+}
+
+Make_Bar_Plot_return_Plot_type <- function(with_Others,x){
+  with_Others$Major_Taxa <- rownames(with_Others)
+  with_Others.g <- gather(with_Others, Sample, Proportion, -Major_Taxa)
+  
+  #hier variabeln anpassen
+  Mergin_table <- data.frame("Sample"=row.names(x),  "d.Alk" = x$d.Alk,
+                             "day"= x$date, "Mesocosm"= x$Mesocosm,
+                              "Probenart"=x$Sample.Type, "Type" = x$Type)
+  
+  with_Others.g2 <- merge(with_Others.g, Mergin_table)
+  
+  Others_for_removal <- "Others"
+  no_others <- levels(as.factor(with_Others.g2$Major_Taxa))[!levels(as.factor(with_Others.g2$Major_Taxa))%in% Others_for_removal]
+  levels_append_Others<- as.factor(append(no_others,"Others"))
+  with_Others.g2$Major_Taxa <- factor(with_Others.g2$Major_Taxa
+                                      , levels = levels_append_Others)
+  b <- factor(with_Others.g2$Major_Taxa
+              , levels = levels_append_Others)
+  
+  with_Others.g2$Type <- factor(with_Others.g2$Type , levels = type_ordering)
+  
+  a <- ggplot(with_Others.g2, aes(x=as.factor(Type), y=Proportion, fill=Major_Taxa)) +
+    geom_bar(width=0.6, stat="identity", na.rm = TRUE,position="fill") +
+    #facet_grid(~as.factor(day)) + 
+    scale_fill_viridis(discrete = TRUE, option = "D")
+  return(a)
+}
+
+
+Make_Bar_Plot_return_Plot_treatment <- function(with_Others,x){
+  with_Others$Major_Taxa <- rownames(with_Others)
+  with_Others.g <- gather(with_Others, Sample, Proportion, -Major_Taxa)
+  
+  #hier variabeln anpassen
+  Mergin_table <- data.frame("Sample"=row.names(x),  "d.Alk" = x$d.Alk,
+                             "day"= x$date, "Mesocosm"= x$Mesocosm,
+                              "Probenart"=x$Sample.Type, "Type" = x$Type, 
+                             "Treatment" = x$Treatment)
+  
+  with_Others.g2 <- merge(with_Others.g, Mergin_table)
+  
+  Others_for_removal <- "Others"
+  no_others <- levels(as.factor(with_Others.g2$Major_Taxa))[!levels(as.factor(with_Others.g2$Major_Taxa))%in% Others_for_removal]
+  levels_append_Others<- as.factor(append(no_others,"Others"))
+  with_Others.g2$Major_Taxa <- factor(with_Others.g2$Major_Taxa
+                                      , levels = levels_append_Others)
+  b <- factor(with_Others.g2$Major_Taxa
+              , levels = levels_append_Others)
+  
+  
+  a <- ggplot(with_Others.g2, aes(x=as.factor(Treatment), y=Proportion, fill=Major_Taxa)) +
+    geom_bar(width=0.6, stat="identity", na.rm = TRUE,position="fill") +
+    #facet_grid(~as.factor(day)) + 
+    scale_fill_viridis(discrete = TRUE, option = "D")
+  return(a)
+}
+
+```
+
+draw the stackedbarplot phylum  with the type. Der code in diesem Chunck wird später gelöscht. er ist nur da, weil es am Anfang sinn ergeben hat die Funktion zu übernehmen. 
+```{r}
+table_stacked_barplot_type <- OTU_Table_For_Plot(my_phyloseq_water,"class",5)
+Wasser_community_plot_type <- Make_Bar_Plot_return_Plot_type(table_stacked_barplot_type,sample_data(my_phyloseq_water))+
+  ggtitle("Water Community  ~ Alkalinity Type") +
+  scale_y_continuous(expand = c(0,0))+
+  labs(fill= "Class ", x= "Alkalinity Type")+
+  theme(panel.grid = element_blank()) +
+   theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+Wasser_community_plot_type
+#lohnt nicht den plot mitzunehmen
+
+```
+ASVs statistics mit DESeq2 und stackedbarplot mit significanten ASVs
+```{r}
+my_deseq2 <- phyloseq_to_deseq2(my_phyloseq_water, ~Type)
+
+sizeFactors(my_deseq2) <- rep(1, ncol(my_deseq2))
+
+Deseq_water <- DESeq(my_deseq2, fitType = "parametric")
+
+resultsNames(Deseq_water)
+
+ressult_deseq_DvsO <- results(Deseq_water, contrast = c("Type", "Dissolved","Olivine"))
+ressult_deseq_DvsN <- results(Deseq_water, contrast = c("Type", "Dissolved","No addition"))
+ressult_deseq_OvsN <- results(Deseq_water, contrast = c("Type", "Olivine","No addition"))
+
+
+sig_ASVs_DvsO <- ressult_deseq_DvsO[which(ressult_deseq_DvsO$padj < 0.05),]
+sig_ASVs_DvsN <- ressult_deseq_DvsN[which(ressult_deseq_DvsN$padj < 0.05),]
+sig_ASVs_OvsN <- ressult_deseq_OvsN[which(ressult_deseq_OvsN$padj < 0.05),]
+
+
+rownames(sig_ASVs_DvsO)
+rownames(sig_ASVs_DvsN)
+rownames(sig_ASVs_OvsN)
+
+length(rownames(sig_ASVs_DvsO))
+length(rownames(sig_ASVs_DvsN))
+length(rownames(sig_ASVs_OvsN))
+
+# tabelle erstellen für einen Barplot mit der Anzahl and unterschiedlich Signifikanten ASVs
+
+pairs_tested <- cbind(c("diss. ~ no add.",
+                        "oli. ~ no add.",
+                        "oli. ~ diss."))
+
+pairs_ordering <- c("diss. ~ no add.",
+                    "oli. ~ no add.",
+                    "oli. ~ diss.")
+
+Sig_ASVs <- cbind(c(length(rownames(sig_ASVs_DvsN)),
+                    length(rownames(sig_ASVs_OvsN)),
+                    length(rownames(sig_ASVs_DvsO))))
+                    
+
+Significant_pairs_table <- data.frame(pairs_tested,Sig_ASVs)%>%
+  as.data.frame()%>%
+  rename("Pairs" = "pairs_tested",
+         "value" = "Sig_ASVs") 
+
+Significant_pairs_table$Pairs <- factor(Significant_pairs_table$Pairs, levels = pairs_ordering )
+
+# Object erstellen mit nur den Signifikanten ASVs für einen weiterne Stackedbarplot 
+
+Barplot_significant_water_ASVs_Type <- ggplot(Significant_pairs_table, aes(x = Pairs, y = value))+
+  labs(x = "Pairs", y = "Count", title = "Sgnificant ASVs ~ Alkalinity type") +
+  scale_y_continuous( limits = c(0,130), expand = c(0,0), breaks = c(0,25,50,75,100,125)) +
+  theme(panel.grid = element_blank()) +
+  theme_classic()+
+  theme(axis.ticks = element_line(size = 0.25))+
+  geom_hline(yintercept = seq(0, 125, by = 25), color = "azure4", linetype = "dashed") +
+  geom_bar(stat = "identity", fill = "darkseagreen4", width = 0.3) +
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+
+ggsave("Barplot_SigASVs_Stats.png", Barplot_significant_water_ASVs_Type, width = 12, height = 10)
+
+
+
+#stacked barplots with just the significant ASVs from the chunk above 
+
+# make a count table and a tax table with just the significant ASVs 
+
+Sig_ASVs_Type <-unique(c(rownames(sig_ASVs_DvsO),
+                                    rownames(sig_ASVs_DvsN),
+                                    rownames(sig_ASVs_OvsN)))
+                                    
+
+tax_sig_ASVs_water<- mytax[Sig_ASVs_Type,]
+
+count_sig_ASVs_water <- rar_counttable_water[rownames(tax_sig_ASVs_water),]
+
+#remove Control because it is not necessary for comparisson 
+meta_data_sig_ASVs <- meta_data_water%>%
+  filter(Type != "Control")
+
+count_sig_ASVs_water_phy <- count_sig_ASVs_water [,rownames(meta_data_sig_ASVs)]
+
+
+
+  
+phyloseq_water_sig_ASVs <- phyloseq(otu_table(count_sig_ASVs_water_phy, taxa_are_rows= T),
+                       sample_data(meta_data_sig_ASVs),
+                       tax_table(as.matrix(tax_sig_ASVs_water)))
+
+#plot the stackedbarplot 
+
+
+
+table_stacked_barplot_type_sig <- OTU_Table_For_Plot(phyloseq_water_sig_ASVs,"class",8)
+Wasser_community_sig_ASVs <- Make_Bar_Plot_return_Plot_type(table_stacked_barplot_type_sig,sample_data(phyloseq_water_sig_ASVs))+
+  ggtitle("Water Community  ~ Alkalinity Type") +
+  scale_y_continuous(expand = c(0,0))+
+  labs(fill= "Class ", x= "Alkalinity Type")+
+  theme(panel.grid = element_blank()) +
+   theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+
+ggsave("stacked_barplot_significant_ASVs_type.png", Wasser_community_sig_ASVs, width = 12, height = 10)
+
+# I keep the plot but I dont think that there is much reason to show it. 
+
+
+
+# make a counttable with just the significatn asv from olivine and dissolved 
+
+Sig_ASVs_Type_DvsO <-rownames(sig_ASVs_DvsO)
+                                    
+
+tax_sig_ASVs_DvsO<- mytax[Sig_ASVs_Type_DvsO,]
+
+count_sig_ASVs_DvsO <- rar_counttable_water[rownames(tax_sig_ASVs_DvsO),]
+colSums(count_sig_ASVs_DvsO)
+
+meta_data_sig_ASVs_DvsO <- meta_data_water %>%
+  filter(Type %in% c("Olivine","Dissolved"))
+count_sig_ASVs_DvsO1 <- count_sig_ASVs_DvsO[,rownames(meta_data_sig_ASVs_DvsO)]
+
+
+phyloseq_DvsO_sig_ASVs <- phyloseq(otu_table(count_sig_ASVs_DvsO1, taxa_are_rows= T),
+                       sample_data(meta_data_sig_ASVs_DvsO),
+                       tax_table(as.matrix(tax_sig_ASVs_DvsO)))
+
+table_stacked_barplot_type_sig_DvsO <- OTU_Table_For_Plot(phyloseq_DvsO_sig_ASVs,"class",5)
+Wasser_community_sig_ASVs_DvsO <- Make_Bar_Plot_return_Plot_type(table_stacked_barplot_type_sig_DvsO,sample_data(phyloseq_DvsO_sig_ASVs))+
+  ggtitle("Water Community  ~ Alkalinity Type") +
+  scale_y_continuous(expand = c(0,0))+
+  labs(fill= "Order ", x= "Alkalinity Type")+
+  theme(panel.grid = element_blank()) +
+   theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+Wasser_community_sig_ASVs_DvsO
+
+
+ggsave("stacked_barplot_significant_ASVs_type_DvsO.png", Wasser_community_sig_ASVs_DvsO, width = 12, height = 10)
+
+
+# This plot however is great to describe changes between dissolved alkalinity and 
+# particulated alkalinity 
+
+```
+difference between alkalinity addition dissolved and olivine from 250 to 500 difference in concentration
+
+```{r}
+
+my_deseq2_alk <- phyloseq_to_deseq2(my_phyloseq_water, ~Treatment)
+
+sizeFactors(my_deseq2_alk) <- rep(1, ncol(my_deseq2_alk))
+
+Deseq_water_alk <- DESeq(my_deseq2_alk, fitType = "parametric")
+
+resultsNames(Deseq_water_alk)
+
+ressult_deseq_alk_dis <- results(Deseq_water_alk,
+                                 contrast = c("Treatment", "Dissolved 250","Dissolved 500"))
+ressult_deseq_alk_oli <- results(Deseq_water_alk,
+                                 contrast = c("Treatment", "Olivine 250","Olivine 500"))
+
+
+sig_diss<- ressult_deseq_alk_dis[which(ressult_deseq_alk_dis$pvalue < 0.05),]
+sig_oli <- ressult_deseq_alk_oli[which(ressult_deseq_alk_oli$pvalue < 0.05),]
+
+
+sig_ASVs_diss <- rownames(sig_diss)
+sig_ASVs_oli <- rownames(sig_oli)
+
+length(sig_ASVs_diss)
+length(sig_ASVs_oli)
+
+
+
+asvs_alk <- unique(c(
+ rownames(sig_diss), 
+  rownames(sig_oli)))
+
+#tabelle mit asvs die in beiden Alkalinitäts Typen mit höherer alkalinität mehr vertreten waren
+tax_asvs_alk<- mytax[asvs_alk,]
+
+count_asvs_alk <- mycount_water[asvs_alk,]
+
+meta_asvs_alk <- meta_data_water %>%
+  filter(Type != "Control")
+
+
+count_asvs_alk1 <- count_asvs_alk[,rownames(meta_asvs_alk)]
+
+phyloseq_asvs_alk <- phyloseq(otu_table(count_asvs_alk1, taxa_are_rows= T),
+                       sample_data(meta_asvs_alk),
+                       tax_table(as.matrix(tax_asvs_alk)))
+
+table_stacked_barplot_asvs_alk <- OTU_Table_For_Plot(phyloseq_asvs_alk,"order",5)
+Wasser_community_asvs_alk <- Make_Bar_Plot_return_Plot_treatment(table_stacked_barplot_asvs_alk,sample_data(phyloseq_asvs_alk))+
+  ggtitle("Water Community  ~ Alkalinity Type") +
+  scale_y_continuous(expand = c(0,0))+
+  labs(fill= "Class ", x= "Alkalinity Type")+
+  theme(panel.grid = element_blank()) +
+   theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+Wasser_community_asvs_alk
+
+#no need for this plot in the analysis, as Concentrations effect is minimal on the Water community
+
+
+
+```
+
+
+
+Seperate Analyse der Austern Kiemen. Erstellung eine Phyloseq Objektes für weitere Analysen  
+```{r}
+
+meta_data_Kieme <- meta_data %>%
+  filter(Sample.Type == "Gill") %>%
+  select("Sample.number","Sample.ID","date","time","Mesocosm","d.Alk","Sample.Type","Type","Treatment")
+
+mycount_Kieme <- mycount[, colnames(mycount) %in% rownames(meta_data_Kieme)]
+
+median(colSums(mycount_Kieme))
+
+#remove samples with fewer than a 250 colsums
+
+mycount_kieme_filtered <- mycount_Kieme %>%
+  filter(rowSums(select(., where(is.numeric))) != 0)%>%
+  select(where(~ sum(.) >= 250))%>%
+  sqrt()%>%
+  ceiling()
+
+
+meta_data_kieme_filered <- meta_data_Kieme[rownames(meta_data_Kieme) %in% colnames(mycount_kieme_filtered),] 
+
+colnames(mycount_kieme_filtered)
+
+#remove sample 82 because it has to few reads 
+
+
+rar_counttable_Kieme <- t(rrarefy(t(mycount_kieme_filtered), sample = min(colSums(mycount_kieme_filtered))))
+
+my_phyloseq_kieme <- phyloseq(otu_table(rar_counttable_Kieme, taxa_are_rows= T),
+                       sample_data(meta_data_kieme_filered),
+                       tax_table(as.matrix(mytax)))
+
+```
+
+PCoA mit Kiemen
+```{r}
+vst_pcoa_Kieme <- ordinate(my_phyloseq_kieme, method="PCoA", distance = "bray")
+PCoA_BC_K <- plot_ordination(my_phyloseq_kieme,vst_pcoa_Kieme, color = "Mesocosm", label = "date") 
+
+
+PCoA_Data <- PCoA_BC_K$data
+
+date_ordering <- c("07.05.24","28.05.24","18.06.24","09.07.24")
+
+PCoA_Data$date <- factor(PCoA_Data$date, levels = date_ordering)
+
+p_PCoA_gill_time <- ggplot(PCoA_Data, aes(x=Axis.1, y=Axis.2, color=date))+
+  geom_point(size=4)+
+  ggtitle("PCoA Gills ~ Sampling Timepoint") +
+  theme(panel.grid = element_blank())+
+  labs(x= "Axis.1 [9.5%]", y="Axis.2 [7.2%]", color = "Sampling Date")+ 
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+ggsave("PCoA_Gills_time.png", p_PCoA_gill_time, width = 12, height = 10)
+
+
+
+```
+
+Diversität Kieme 
+```{r}
+p_diversity_kieme <- plot_richness(my_phyloseq_kieme, measures = c("Observed","Shannon"))
+  
+diversity_data_kieme <-  p_diversity_kieme$data
+diversity_data_kieme$variable <- gsub("Observed","Richness",diversity_data_kieme$variable)
+
+
+p_alpha_boxplot_MK_kieme <- ggplot(diversity_data_kieme, aes(x= Mesocosm, y= value))+
+  facet_wrap(~variable, scales = "free_y")+
+  geom_boxplot(show.legend = T)+ 
+  ggtitle("Alpha-diversity measures-- Kieme ~ Mesocosmen")+
+  labs(x = "Mesocosm")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))
+
+
+p_alpha_boxplot_time <- ggplot(diversity_data_kieme, aes(x= date, y= value))+
+  facet_wrap(~variable, scales = "free_y")+
+  geom_boxplot(show.legend = T)+ 
+  ggtitle("Alpha-diversity -- Kieme ~ Datum")+
+  labs(x = "date")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))
+
+#no need for the diversity plots, as they dont tell anything about the gill biodiversity
+```
+
+
+Kiemen Proben analyse nur der letzte Probennahme Tag. Erst eine PCoA und dann barplots zwischen den Treatments bei den kiemen
+```{r}
+meta_data_Kieme_last <- meta_data_Kieme%>%
+  filter(date == "09.07.24")
+
+count_table_kime_last <- mycount[,rownames(meta_data_Kieme_last)]
+
+colSums(count_table_kime_last) 
+
+rar_counttable_kieme_last <- t(rrarefy(t(count_table_kime_last), sample = min(colSums(count_table_kime_last))))
+
+
+phyloseq_last <- phyloseq(otu_table(rar_counttable_kieme_last, taxa_are_rows= T),
+                       sample_data(meta_data_Kieme_last),
+                       tax_table(as.matrix(mytax)))
+
+
+vst_pcoa_kieme_last <- ordinate(phyloseq_last, method="PCoA", distance = "bray")
+PCoA_BC_kieme_last <- plot_ordination(phyloseq_last,vst_pcoa_kieme_last, color = "Mesocosm", label = "d.Alk") 
+
+
+
+
+PCoA_Kieme_last_Data <- PCoA_BC_kieme_last$data
+
+centroid_kieme_last <- as.data.frame(PCoA_Kieme_last_Data) %>%
+  group_by(Treatment) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+PCoA_Kieme_last_Data$Treatment <- factor(PCoA_Kieme_last_Data$Treatment, levels = treatment_ordering)
+
+PCoA_Kieme_last <- ggplot(PCoA_Kieme_last_Data, aes(x=Axis.1, y=Axis.2, color=Treatment))+
+  geom_point(size=4)+
+  geom_point(data=centroid_kieme_last, aes(x=Axis.1, y=Axis.2, fill = Treatment), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("PCoA last Gill Samples ~ Treatment")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [13.3%]", y="Axis.2 [12%]", color= "Treatment")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)+
+  scale_fill_manual(values = color_Treatment_vector )
+
+ggsave("PCoA_Gills_last.png", PCoA_Kieme_last, width = 12, height = 10)
+
+
+```
+
+Stackedbarplot für die Kiemenproben am ende mit den Signifikanten ASVs 
+```{r}
+#stackedbarplot
+
+Make_Bar_Plot_return_Plot_kieme_finale <- function(with_Others,x){
+  with_Others$Major_Taxa <- rownames(with_Others)
+  with_Others.g <- gather(with_Others, Sample, Proportion, -Major_Taxa)
+  
+  #hier variabeln anpassen
+  Mergin_table <- data.frame("Sample"=row.names(x),  "d.Alk" = x$d.Alk,
+                             "day"= x$date, "Mesocosm"= x$Mesocosm,
+                              "Sample.Type"=x$Sample.Type,"Treatment"=x$Treatment,
+                             "Type"= x$Type)
+  
+  with_Others.g2 <- merge(with_Others.g, Mergin_table)
+  
+  Others_for_removal <- "Others"
+  no_others <- levels(as.factor(with_Others.g2$Major_Taxa))[!levels(as.factor(with_Others.g2$Major_Taxa))%in% Others_for_removal]
+  levels_append_Others<- as.factor(append(no_others,"Others"))
+  with_Others.g2$Major_Taxa <- factor(with_Others.g2$Major_Taxa
+                                      , levels = levels_append_Others)
+  b <- factor(with_Others.g2$Major_Taxa
+              , levels = levels_append_Others)
+  
+  
+  a <- ggplot(with_Others.g2, aes(x=as.factor(Treatment), y=Proportion, fill=Major_Taxa)) +
+    geom_bar(width=0.6, stat="identity", na.rm = TRUE,position="fill") +
+    #facet_grid(~as.factor(day)) + 
+    scale_fill_viridis(discrete = TRUE, option = "D")
+  return(a)
+}
+
+
+## DESEQ2 Kiemen leter TAG 
+##################################### hier bist du#############################################
+
+Kiemen_DEseq2 <- phyloseq_to_deseq2(phyloseq_last,~Type)
+sizeFactors(Kiemen_DEseq2) <- rep(1, ncol(Kiemen_DEseq2))
+
+Deseq_norm_kiemen <- DESeq(Kiemen_DEseq2, fitType = "parametric")
+
+
+###  why does this not work? Something wrong with dissolved.250
+resultsNames(Deseq_norm_kiemen)
+
+result_deseq_kieme_last_o_d <- results(Deseq_norm_kiemen, contrast = c("Type", "Olivine","Dissolved"))
+result_deseq_kieme_last_k_o <- results(Deseq_norm_kiemen, contrast = c("Type", "No.addition","Olivine"))
+result_deseq_kieme_last_k_d <- results(Deseq_norm_kiemen, contrast = c("Type","No.addition","Dissolved"))
+
+
+
+
+sig_ASVs_Kieme_last_o_d <- result_deseq_kieme_last_o_d[which(result_deseq_kieme_last_o_d$pvalue < 0.05),]
+sig_ASVs_Kieme_last_k_o <- result_deseq_kieme_last_k_o[which(result_deseq_kieme_last_k_o$pvalue < 0.05),]
+sig_ASVs_Kieme_last_k_d <- result_deseq_kieme_last_k_d[which(result_deseq_kieme_last_k_d$pvalue < 0.05),]
+
+# kann man die signifikanten ASvs hochrechnen n einer neuen counttable? 
+
+rownames(sig_ASVs_Kieme_last_o_d)
+rownames(sig_ASVs_Kieme_last_k_o)
+rownames(sig_ASVs_Kieme_last_k_d)
+
+Significant_last_gill_ASV <- unique(c(rownames(sig_ASVs_Kieme_last_o_d),rownames(sig_ASVs_Kieme_last_k_o),rownames(sig_ASVs_Kieme_last_k_d)))
+#are these pathogenic? correlate with mortality
+
+```
+
+Unifrac tree generation
+```{r}
+sequences <- paste0(getwd(),"/my_ASVs.fa") 
+my_DNA_sequences <- readDNAStringSet(sequences,"fasta")
+
+tree <- msa(my_DNA_sequences, method = "ClustalOmega")
+  as.DNAbin() %>%
+  dist.dna() %>%
+  njs()
+
+
+tree_align <- msaConvert(tree, type = "seqinr::alignment")
+tree_distance <- dist.alignment(tree_align,"identity")
+
+tree_samples <- nj(tree_distance)
+
+plot(tree_samples)
+
+
+tree_samples_rooted<- midpoint(tree_samples)
+
+is.rooted(tree_samples)  
+
+is.rooted(tree_samples_rooted)  
+
+phy_tree(phyloseq_all) <- tree_samples_rooted
+
+phyloseq_all
+```
+Plot Unifrac 
+```{r}
+#plot all samples in a PCoA using the unifrac distance weighted and unweighted. 
+Unifrac_ordination_w <- ordinate(phyloseq_all, "PCoA", "unifrac", weighted = T)
+unifrac_plot_w<- plot_ordination(phyloseq_all, Unifrac_ordination_w, color = "Sample.Type")
+#es macht keinen Sinn die weighted unifrac zu nehmen, weil ich die Proben sowieso nicht rarefizieren kann
+#Kiemen und wasser proben sind zuu unterschiedlich zum gleich behandeln. 
+
+Unifrac_ordination_F <- ordinate(phyloseq_all, "PCoA", "unifrac", weighted = F)
+unifrac_plot_F<- plot_ordination(phyloseq_all, Unifrac_ordination_F, color = "Sample.Type")
+
+Unifrac_F_all <- unifrac_plot_F$data
+
+centroid_unifrac <- as.data.frame(Unifrac_F_all) %>%
+  group_by(Sample.Type) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+Unifrac_F_all_plot <- ggplot(Unifrac_F_all, aes(x=Axis.1, y=Axis.2, color=Sample.Type))+
+  geom_point(size=4)+
+  geom_point(data=centroid_unifrac, aes(x=Axis.1, y=Axis.2, fill = Sample.Type), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("PCoA All Samples ~ Sample Type")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [19.7%]", y="Axis.2 [5.6%]", color= "Sample Type")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+
+#now draw a unifrac with just the water samples
+
+phy_tree(my_phyloseq_water) <- tree_samples_rooted
+
+
+Unifrac_ordination_water_w <- ordinate(my_phyloseq_water, "PCoA", "unifrac", weighted = T)
+unifrac_plot_w<- plot_ordination(my_phyloseq_water, Unifrac_ordination_water_w, color = "Treatment")
+
+unifrac_plot_w_data <- unifrac_plot_w$data
+
+centroid_unifrac_water <- as.data.frame(unifrac_plot_w_data) %>%
+  group_by(Treatment) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+Unifrac_Water_plot <- ggplot(unifrac_plot_w_data, aes(x=Axis.1, y=Axis.2, color=Treatment))+
+  geom_point(size=4)+
+  geom_point(data=centroid_unifrac_water, aes(x=Axis.1, y=Axis.2, fill = Treatment), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("Weighted Unifrac Water ~ Treatment")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [19.7%]", y="Axis.2 [5.6%]", color= "Treatment")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20))+
+  theme(legend.text = element_text(size= 16))
+
+#weighted Unifrac with the all gill samples 
+
+
+phy_tree(phyloseq_last) <- tree_samples_rooted
+
+Unifrac_ordination_kieme_w <- ordinate(my_phyloseq_kieme, "PCoA", "unifrac", weighted = T)
+unifrac_plot_k<- plot_ordination(my_phyloseq_kieme, Unifrac_ordination_kieme_w, color = "Treatment")
+# sieht scheiße aus nichts zu erkennen lassen wir 
+
+#unifrac mit letzten kiemen proben
+phy_tree(phyloseq_last) <- tree_samples_rooted
+sample_data(phyloseq_last)
+
+#sieht auch scheiße aus
+Unifrac_ordination_last_kieme_w <- ordinate(phyloseq_last, "PCoA", "unifrac", weighted =F)
+unifrac_plot_last_kieme_w<- plot_ordination(phyloseq_last, Unifrac_ordination_last_kieme_w, color = "Treatment", label = "Sample.ID")
+
+unifrac_plot_lastgill_data <- unifrac_plot_last_kieme_w$data
+
+centroid_unifrac_last_gill <- as.data.frame(unifrac_plot_lastgill_data) %>%
+  group_by(Treatment) %>%
+  summarize(Axis.1 = mean(Axis.1),
+            Axis.2 = mean(Axis.2), .groups ="drop")%>%
+  as.data.frame()
+
+Unifrac_last_kieme_plot <- ggplot(unifrac_plot_lastgill_data, aes(x=Axis.1, y=Axis.2, color=Treatment))+
+  geom_point(size=4)+
+  geom_point(data=centroid_unifrac_last_gill, aes(x=Axis.1, y=Axis.2, fill = Treatment), size =6 , shape=22,
+             show.legend = F, color = "black")+
+  ggtitle("unWeighted Unifrac Water ~ Treatment")+
+  #stat_ellipse(show.legend = F)+
+  theme(panel.grid = element_blank())+
+  labs(x="Axis.1 [19.7%]", y="Axis.2 [5.6%]", color= "Treatment")+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20))+
+  theme(legend.text = element_text(size= 16))
+```
+
+Mortalitäten and heatmap 
+```{r}
+mortality_rate<- read.csv("Mortalität.csv", sep = ";")
+
+mortality_rate$Treatment <- factor(mortality_rate$Treatment, levels = treatment_ordering) 
+
+
+Mortality_plot <- ggplot(mortality_rate, aes(x = Treatment, y = mortality))+
+  labs(x = "Treatment", y = "Mortality N", title = "Oyster Mortality ~ Treatment") +
+  scale_y_continuous( limits = c(0,25), expand = c(0,0), breaks = c(0,5,10,15,20,25)) +
+  theme(panel.grid = element_blank()) +
+  theme_classic()+
+  theme(axis.ticks = element_line(size = 0.25))+
+  geom_bar(stat = "identity", fill = "cadetblue", width = 0.3) +
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))
+
+ggsave("Barplot_mortality.png", Mortality_plot, width = 12, height = 10)
+
+tax_asv_last_gill_sig <- mytax[Significant_last_gill_ASV,] 
+count_asv_last_gill_sig <- mycount[Significant_last_gill_ASV,rownames(meta_data_Kieme_last)
+]
+
+rownames(count_asv_last_gill_sig) <- tax_asv_last_gill_sig$family
+
+
+cor_dataframe<- cbind(meta_data_Kieme_last,t(count_asv_last_gill_sig))
+
+agg_heatmap <- cor_dataframe%>%
+  group_by(Treatment) %>%
+  summarise(across(where(is.numeric), sum))%>%
+  select(-"Sample.number",-"d.Alk")
+
+heat_matrix <-  as.matrix(agg_heatmap[,-1])
+rownames(heat_matrix) <- agg_heatmap$Treatment
+
+
+  
+heatmap <- pheatmap(heat_matrix,
+         color = colorRampPalette(c("lightblue", "darkred"))(50),
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         cluster_rows = F,
+         cluster_cols = F,
+         main = "Heatmap of ASV Counts by Treatment",
+         angle_col = 0,
+         fontsize_row = 18,
+         fontsize_col = 18)
+print(heatmap)
+
+ggsave("heatmap_sig_ASVs_gills.png",heatmap,width = 12, height = 10 )
+
+
+
+```
+
+statistical test last oyster samples 
+```{r}
+
+#centroid test
+#remove t0 from meta data and make a counttable with the removed samples
+phyloseq_last <- phyloseq(otu_table(rar_counttable_kieme_last, taxa_are_rows= T),
+                       sample_data(meta_data_Kieme_last),
+                       tax_table(as.matrix(mytax)))
+
+meta_data_Kieme_last
+
+
+
+#make a distance matrix out of the counttable
+rare_dist_gill <- vegdist(t(rar_counttable_kieme_last)) %>%
+  as.dist()
+
+meta_data_Kieme_last$date <- as.factor(meta_data_Kieme_last$date)
+meta_data_Kieme_last$Mesocosm <- as.factor(meta_data_Kieme_last$Mesocosm)
+meta_data_Kieme_last$Type <- as.factor(meta_data_Kieme_last$Type)
+
+
+
+
+adonis_result_gill_Mesocosm <- adonis2(rare_dist_gill~Mesocosm, data=meta_data_Kieme_last, permutations = 1000)
+adonis_result_gill_Type <- adonis2(rare_dist_gill~Type, data=meta_data_Kieme_last, permutations = 1000)
+
+
+variable_tested <- cbind(c("Mesocosm", "Type"))
+Adonis_pvalues <- cbind(c(adonis_result_gill_Mesocosm$`Pr(>F)`[1],
+                          adonis_result_gill_Type$`Pr(>F)`[1]))  %>%
+                  round(3)
+
+adonis_table_pvalue_gill <- data.frame(variable_tested,Adonis_pvalues)%>%
+  as.data.frame()%>%
+  rename("Parameter" = "variable_tested",
+         "p_value" = "Adonis_pvalues") %>%
+  Significante_indicator("p_value")
+
+
+write.table(adonis_table_pvalue_gill,"adonis_centroid_test_gill.tsv", sep="\t", row.names = F, quote = T )
+
+  
+  
+pairwise_table_Mesocosm_gill <- pairwise.adonis(rare_dist_gill, meta_data_Kieme_last$Mesocosm) %>%
+  select(pairs,p.value,p.adjusted) %>%
+  rename("Pairs" = "pairs",
+         "p_value" = "p.value",
+         "p_value_adjusted"= "p.adjusted") %>%
+  Significante_indicator("p_value_adjusted")
+
+pairwise_table_Type_gill <- pairwise.adonis(rare_dist_gill, meta_data_Kieme_last$Type) %>%
+  select(pairs,p.value,p.adjusted) %>%
+  rename("Pairs" = "pairs",
+         "p_value" = "p.value",
+         "p_value_adjusted"= "p.adjusted") %>%
+  Significante_indicator("p_value_adjusted")
+
+write.table(pairwise_table_Mesocosm_gill,"pairwise_posthoc_Mesocosm_gill.tsv", sep="\t", row.names = F, quote = T)
+write.table(pairwise_table_Type_gill,"pairwise_posthoc_Type_gill.tsv", sep="\t", row.names = F, quote = T)
+
+```
+Plots for the chemistry during the experiment 
+```{r}
+prealk <- read.csv("alkalinity.csv", sep = ";") %>%
+  na.omit() %>%
+  select(day,treatment,pH_PreAlk_mean,dTA_PreAlk,TA_PreAlk..filtered.) %>%
+   rename(
+    pH = pH_PreAlk_mean,
+    dTA = dTA_PreAlk,
+    Alkalinity = TA_PreAlk..filtered.
+  )%>%
+  filter(treatment != "Backup L1.5")
+
+days_alk_comp <- c(-2,20,41)
+alk_end_day<- c(0,21,43)
+prealk$treatment <- factor(prealk$treatment, levels = treatment_ordering)
+
+alkalinity_plot <- ggplot(prealk, aes(x = day,y=dTA, color=treatment))+
+  geom_point(size = 4)+
+  geom_vline(xintercept = alk_end_day, linetype = "dashed", color ="darkred")+
+  labs(x="day", y="Delta Alkalinity µmol/L", color= "Treatment", title = "Alkalinity ~ Alkalization Mesocosms ")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)
+
+total_alkalinity_plot <- ggplot(prealk, aes(x = day,y=Alkalinity, color=treatment))+
+  geom_point(size = 4)+
+  geom_vline(xintercept = alk_end_day, linetype = "dashed", color ="darkred")+
+  labs(x="day", y="Total Alkalinity µmol/L", color= "Treatment", title = "Alkalinity ~ Alkalization Mesocosms ")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)
+
+ggsave("alkalinity.png",alkalinity_plot,width = 10, height = 7, dpi = 300 )
+ggsave("total_alkalinity.png",total_alkalinity_plot,width = 10, height = 7, dpi = 300 )
+
+
+pH_plot<- ggplot(prealk, aes(x = day,y=pH, color=treatment))+
+  geom_point(size = 4)+
+  geom_vline(xintercept = alk_end_day, linetype = "dashed", color ="darkred")+
+  labs(x="day", y="pH", color= "pH", title = "pH ~ Alkalization Mesocosms")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)
+
+ggsave("pH.png",pH_plot,width = 10, height = 7, dpi = 300 )
+
+
+temp <- read.csv("Chemie.csv", sep = ";") %>%
+  select(time_d,treatment,Temp)%>%
+  na.omit()
+temp$treatment <- factor(temp$treatment, levels = treatment_ordering)
+
+temp_plot <- ggplot(temp, aes(x=time_d,y=Temp, color=treatment))+
+    geom_point(size = 4)+
+  labs(x="Day", y="Temperature °C", color= "Treatment", title = "Temperature Exposure Mesocosms")+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_color_manual(values = color_Treatment_vector)
+
+ggsave("Temp.png",temp_plot,width = 10, height = 7, dpi = 300 )
+
+
+#table to calculate the difference in alkalinity addition
+
+days_alk_comp <- c(-2,20,41)
+
+prealk_table <- prealk %>%
+  filter(day %in% days_alk_comp)%>%
+  filter(treatment !="No addition")%>%
+  mutate(concentration = str_sub(treatment, -3,-1))%>%
+  group_by(day)%>%
+  mutate(
+    dta_diff_250 = dTA[treatment == "Olivine 250"] - dTA[treatment == "Dissolved 250"],
+    dta_diff_500 = dTA[treatment == "Olivine 500"] - dTA[treatment == "Dissolved 500"],
+    dta_diff = case_when(
+      treatment %in% c("Olivine 250", "Dissolved 250") ~ dta_diff_250,
+      treatment %in% c("Olivine 500", "Dissolved 500") ~ dta_diff_500,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  ungroup() %>%
+  select(-dta_diff_250, -dta_diff_500)
+
+write.table(prealk_table,"PreAlkTable.tsv", sep="\t", row.names = F, quote = T )
+
+#I need this table again for the plot
+prealk_comp <- prealk %>%
+  filter(day %in% days_alk_comp)%>%
+  filter(treatment !="No addition")%>%
+  mutate(concentration = str_sub(treatment, -3,-1))%>%
+  group_by(day)%>%
+  mutate(
+    dta_diff_250 = dTA[treatment == "Olivine 250"] - dTA[treatment == "Dissolved 250"],
+    dta_diff_500 = dTA[treatment == "Olivine 500"] - dTA[treatment == "Dissolved 500"],
+    dta_diff = case_when(
+      treatment %in% c("Olivine 250", "Dissolved 250") ~ dta_diff_250,
+      treatment %in% c("Olivine 500", "Dissolved 500") ~ dta_diff_500,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  ungroup() %>%
+  select(-dta_diff_250, -dta_diff_500)%>%
+  distinct(day,concentration,.keep_all = T)%>%
+  select(-treatment)%>%
+  mutate(direction = if_else(dta_diff > 0, "Olivine", "Dissolved"))
+
+prealk_comp$direction <- factor(prealk_comp$direction, levels = c("Olivine","Dissolved"))
+
+prealk_diff_p<- ggplot(prealk_comp,aes(x=concentration, y=dta_diff, fill = direction))+
+  geom_bar(stat = "identity")+
+  facet_grid(~day)+  
+  labs(title = "Difference reached Alkalinity addition ~ Type",
+       x="Target levels", y="Olivine - Dissolved [µmol/L]", fill=element_blank())+
+  theme(panel.grid = element_blank())+
+  theme(strip.text = element_text(size = 14))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.text = element_text(size = 16))+
+  theme(axis.title = element_text(size = 20))+
+  theme(plot.title = element_text(size = 24))+
+  theme(legend.title = element_text(size = 20 ))+
+  theme(legend.text = element_text(size= 16))+
+  scale_fill_manual(values = color_type_vector)
+
+ggsave("prealk_diff.png",prealk_diff_p,width = 10, height = 7, dpi = 300 )
+
+
+```
+
+Plots for publication
+```{r}
+
+#Figures 
+PCoA_Mesocosm_centroid_Treatments
+ggsave("PCoA_Water_treatment.png", PCoA_Mesocosm_centroid_Treatments, width = 12, height = 10)
+
+PCoA_Mesocosm_centroid_Type
+ggsave("PCoA_Water_Type.png", PCoA_Mesocosm_centroid_Type, width = 12, height = 10)
+
+PCoA_stat
+ggsave("PCoA_for_Stats.png", PCoA_stat, width = 12, height = 10)
+
+boxplot_reads
+ggsave("Boxplot_reads.png", boxplot_reads, width = 12, height = 10)
+
+p_alpha_boxplot_MK
+ggsave("Diversity_plot_type.png", p_alpha_boxplot_MK, width = 16, height = 8)
+
+Barplot_significant_water_ASVs_Type
+ggsave("Barplot_SigASVs_Stats.png", Barplot_significant_water_ASVs_Type, width = 12, height = 10)
+
+Wasser_community_sig_ASVs
+ggsave("stacked_barplot_significant_ASVs_type.png", Wasser_community_sig_ASVs, width = 12, height = 10)
+
+Wasser_community_sig_ASVs_DvsO
+ggsave("stacked_barplot_significant_ASVs_type_DvsO.png", Wasser_community_sig_ASVs_DvsO, width = 12, height = 10)
+
+p_PCoA_gill_time
+ggsave("PCoA_Gills_time.png", p_PCoA_gill_time, width = 12, height = 10)
+
+Mortality_plot
+ggsave("Barplot_mortality.png", Mortality_plot, width = 12, height = 10)
+
+heatmap
+ggsave("heatmap_sig_ASVs_gills.png",heatmap,width = 12, height = 10 )
+
+prealk_diff_p
+ggsave("prealk_diff.png",prealk_diff_p,width = 10, height = 7, dpi = 300 )
+
+temp_plot
+ggsave("Temp.png",temp_plot,width = 10, height = 7, dpi = 300 )
+
+pH_plot
+ggsave("pH.png",pH_plot,width = 10, height = 7, dpi = 300 )
+
+total_alkalinity_plot
+ggsave("total_alkalinity.png",total_alkalinity_plot,width = 10, height = 7, dpi = 300 )
+
+alkalinity_plot
+ggsave("alkalinity.png",alkalinity_plot,width = 10, height = 7, dpi = 300 )
+```
